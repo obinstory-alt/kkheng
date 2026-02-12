@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   UserProgress, 
@@ -10,16 +9,16 @@ import {
   PracticeMode,
   DialoguePhase,
   Role
-} from './types';
+} from './types.ts';
 import { 
   INITIAL_DIALOGUES, 
   INITIAL_WORDS,
   LOCAL_STORAGE_KEY, 
   DEFAULT_DAILY_GOAL, 
   DEFAULT_ACCURACY_THRESHOLD 
-} from './constants';
-import { GeminiService } from './services/geminiService';
-import PracticeCard from './components/PracticeCard';
+} from './constants.ts';
+import { GeminiService } from './services/geminiService.ts';
+import PracticeCard from './components/PracticeCard.tsx';
 
 type ViewTab = 'practice' | 'library' | 'stats' | 'settings';
 
