@@ -53,25 +53,33 @@ const App: React.FC = () => {
     dailyGoal: DEFAULT_DAILY_GOAL
   });
 
+  // Load progress with SSR safety
   useEffect(() => {
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (saved) {
-      const parsed = JSON.parse(saved);
-      const today = new Date().toISOString().split('T')[0];
-      if (parsed.lastPracticeDate !== today) {
-        parsed.dailyCount = 0;
-        parsed.lastPracticeDate = today;
+      try {
+        const parsed = JSON.parse(saved);
+        const today = new Date().toISOString().split('T')[0];
+        if (parsed.lastPracticeDate !== today) {
+          parsed.dailyCount = 0;
+          parsed.lastPracticeDate = today;
+        }
+        setProgress(parsed);
+        
+        const firstUncompletedDialogue = dialogues.findIndex(d => 
+          !parsed.completedIds?.includes(d.id) || !parsed.roleplayCompletedIds?.includes(d.id)
+        );
+        if (firstUncompletedDialogue !== -1) setCurrentDialogueIndex(firstUncompletedDialogue);
+        
+        const firstUncompletedWord = words.findIndex(w => !parsed.completedWordIds?.includes(w.id));
+        if (firstUncompletedWord !== -1) setCurrentWordIndex(firstUncompletedWord);
+      } catch (e) {
+        console.error("Failed to parse progress", e);
       }
-      setProgress(parsed);
-      
-      const firstUncompletedDialogue = dialogues.findIndex(d => !parsed.completedIds.includes(d.id) || !parsed.roleplayCompletedIds.includes(d.id));
-      if (firstUncompletedDialogue !== -1) setCurrentDialogueIndex(firstUncompletedDialogue);
-      
-      const firstUncompletedWord = words.findIndex(w => !parsed.completedWordIds.includes(w.id));
-      if (firstUncompletedWord !== -1) setCurrentWordIndex(firstUncompletedWord);
     }
   }, [dialogues, words]);
 
+  // Save progress
   useEffect(() => {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(progress));
   }, [progress]);
@@ -80,10 +88,10 @@ const App: React.FC = () => {
   const currentTurn = currentDialogue?.turns[currentTurnIndex];
   const currentWord = words[currentWordIndex];
 
-  // Roleplay 자동 진행 로직
+  // Roleplay 자동 진행 로직 (AI 차례일 때)
   useEffect(() => {
-    if (practiceMode === 'sentence' && dialoguePhase === 'roleplay' && currentTurn) {
-      if (currentTurn.speaker !== userRole && appState === AppState.IDLE) {
+    if (practiceMode === 'sentence' && dialoguePhase === 'roleplay' && currentTurn && appState === AppState.IDLE) {
+      if (currentTurn.speaker !== userRole) {
         setAppState(AppState.WAITING_FOR_AI);
         geminiRef.current.speak(currentTurn.english).then(() => {
           setTimeout(() => {
@@ -93,20 +101,22 @@ const App: React.FC = () => {
             } else {
               completeRoleplay();
             }
-          }, 500);
+          }, 800);
         });
       }
     }
-  }, [practiceMode, dialoguePhase, currentTurnIndex, userRole, currentDialogueIndex]);
+  }, [practiceMode, dialoguePhase, currentTurnIndex, userRole, currentDialogueIndex, appState]);
 
   const completeRoleplay = () => {
+    if (!currentDialogue) return;
     const dId = currentDialogue.id;
     setProgress(prev => ({
       ...prev,
-      roleplayCompletedIds: !prev.roleplayCompletedIds.includes(dId) ? [...prev.roleplayCompletedIds, dId] : prev.roleplayCompletedIds,
-      dailyCount: prev.dailyCount + 5 // 보너스 점수
+      roleplayCompletedIds: prev.roleplayCompletedIds.includes(dId) ? prev.roleplayCompletedIds : [...prev.roleplayCompletedIds, dId],
+      dailyCount: prev.dailyCount + 5
     }));
-    setAppState(AppState.RESULT); // 결과 화면에서 완료 메시지 표시
+    setAppState(AppState.RESULT);
+    setAnalysis(null);
   };
 
   const handlePlay = useCallback(async () => {
@@ -162,16 +172,14 @@ const App: React.FC = () => {
         if (currentTurnIndex < currentDialogue.turns.length - 1) {
           setCurrentTurnIndex(prev => prev + 1);
         } else {
-          // Phase 1 완료
           setProgress(prev => ({
             ...prev,
-            completedIds: !prev.completedIds.includes(currentDialogue.id) ? [...prev.completedIds, currentDialogue.id] : prev.completedIds
+            completedIds: prev.completedIds.includes(currentDialogue.id) ? prev.completedIds : [...prev.completedIds, currentDialogue.id]
           }));
           setDialoguePhase('roleplay');
           setCurrentTurnIndex(0);
         }
       } else {
-        // Roleplay 진행 중 다음 문장 (사용자가 말한 후 통과했을 때)
         if (currentTurnIndex < currentDialogue.turns.length - 1) {
           setCurrentTurnIndex(prev => prev + 1);
         } else {
@@ -189,7 +197,7 @@ const App: React.FC = () => {
       if (nextWIdx !== -1) setCurrentWordIndex(nextWIdx);
       else setCurrentWordIndex(words.length);
     }
-  }, [practiceMode, dialoguePhase, currentTurn, currentDialogue, currentDialogueIndex, currentWord, currentWordIndex, dialogues, words, progress]);
+  }, [practiceMode, dialoguePhase, currentTurn, currentDialogue, currentWord, words, progress]);
 
   const changePhase = (phase: DialoguePhase) => {
     setDialoguePhase(phase);
@@ -198,53 +206,11 @@ const App: React.FC = () => {
     setAppState(AppState.IDLE);
   };
 
-  const renderLibrary = () => (
-    <div className="w-full max-w-lg mt-4 space-y-4 pb-10 animate-in fade-in slide-in-from-bottom-4">
-      <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100">
-        <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center justify-between">
-          <span>{practiceMode === 'sentence' ? '대화 목록' : '단어 목록'}</span>
-        </h3>
-        <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-          {practiceMode === 'sentence' ? dialogues.map((d, idx) => {
-            const isLearningDone = progress.completedIds.includes(d.id);
-            const isRoleplayDone = progress.roleplayCompletedIds.includes(d.id);
-            return (
-              <div 
-                key={d.id} 
-                onClick={() => { setCurrentDialogueIndex(idx); setCurrentTurnIndex(0); setDialoguePhase('learning'); setActiveTab('practice'); }}
-                className={`p-4 rounded-2xl border transition-all cursor-pointer ${idx === currentDialogueIndex ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-transparent'}`}
-              >
-                <div className="flex justify-between items-center">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase">{d.category}</p>
-                    <p className={`text-sm font-bold ${idx === currentDialogueIndex ? 'text-indigo-600' : 'text-slate-700'}`}>{d.title}</p>
-                  </div>
-                  <div className="flex gap-1">
-                    {isLearningDone && <span title="학습 완료" className="text-emerald-500"><i className="fa-solid fa-graduation-cap"></i></span>}
-                    {isRoleplayDone && <span title="대화 완료" className="text-indigo-500"><i className="fa-solid fa-comments"></i></span>}
-                  </div>
-                </div>
-              </div>
-            );
-          }) : words.map((w, idx) => (
-            <div 
-              key={w.id} 
-              onClick={() => { setCurrentWordIndex(idx); setActiveTab('practice'); }}
-              className={`p-4 rounded-2xl border transition-all cursor-pointer ${idx === currentWordIndex ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-transparent'}`}
-            >
-              <p className="text-[10px] font-bold text-slate-400 uppercase">{w.category}</p>
-              <p className={`text-sm font-bold ${idx === currentWordIndex ? 'text-indigo-600' : 'text-slate-700'}`}>{w.english}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
+  const totalSentenceCount = useMemo(() => dialogues.reduce((acc, d) => acc + d.turns.length, 0), [dialogues]);
   const dailyProgressPercent = Math.min((progress.dailyCount / progress.dailyGoal) * 100, 100);
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col items-center pb-24 px-4">
+    <div className="min-h-screen bg-slate-50 flex flex-col items-center pb-24 px-4 overflow-x-hidden">
       <header className="w-full max-w-lg sticky top-0 bg-slate-50/80 backdrop-blur-md pt-6 pb-4 z-10">
         <div className="flex justify-between items-center mb-4">
           <div onClick={() => setActiveTab('practice')} className="cursor-pointer">
@@ -253,7 +219,7 @@ const App: React.FC = () => {
           <div className="text-right">
             <div className="text-[10px] font-bold text-slate-400">오늘 목표 ({progress.dailyCount}/{progress.dailyGoal})</div>
             <div className="w-24 h-1.5 bg-slate-200 rounded-full mt-1 overflow-hidden">
-               <div className="h-full bg-indigo-600 transition-all duration-500" style={{ width: `${dailyProgressPercent}%` }} />
+               <div className="h-full bg-indigo-600 transition-all duration-500 shadow-[0_0_8px_rgba(79,70,229,0.3)]" style={{ width: `${dailyProgressPercent}%` }} />
             </div>
           </div>
         </div>
@@ -301,32 +267,86 @@ const App: React.FC = () => {
             ) : (
               <div className="text-center py-16 bg-white rounded-3xl shadow-xl w-full border border-slate-100 p-8 mt-4">
                 <i className="fa-solid fa-trophy text-6xl text-amber-400 mb-6 animate-bounce"></i>
-                <h2 className="text-2xl font-bold">전체 학습 완료!</h2>
-                <button onClick={() => window.location.reload()} className="mt-8 px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl">다시 시작</button>
+                <h2 className="text-2xl font-bold text-slate-800">모든 학습을 완료했습니다!</h2>
+                <p className="text-slate-500 mt-2">대단해요! 내일도 계속해서 연습해 보세요.</p>
+                <button onClick={() => window.location.reload()} className="mt-8 px-8 py-3 bg-indigo-600 text-white font-bold rounded-xl active:scale-95 transition-transform shadow-lg shadow-indigo-100">다시 시작</button>
               </div>
             )}
           </div>
         )}
-        {activeTab === 'library' && renderLibrary()}
+
+        {activeTab === 'library' && (
+          <div className="w-full max-w-lg mt-4 space-y-4 pb-10 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center justify-between">
+                <span>{practiceMode === 'sentence' ? '대화 목록' : '단어 목록'}</span>
+              </h3>
+              <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                {practiceMode === 'sentence' ? dialogues.map((d, idx) => {
+                  const isLearningDone = progress.completedIds.includes(d.id);
+                  const isRoleplayDone = progress.roleplayCompletedIds.includes(d.id);
+                  return (
+                    <div 
+                      key={d.id} 
+                      onClick={() => { setCurrentDialogueIndex(idx); setCurrentTurnIndex(0); setDialoguePhase('learning'); setActiveTab('practice'); }}
+                      className={`p-4 rounded-2xl border transition-all cursor-pointer ${idx === currentDialogueIndex ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-transparent hover:border-slate-200'}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase">{d.category}</p>
+                          <p className={`text-sm font-bold ${idx === currentDialogueIndex ? 'text-indigo-600' : 'text-slate-700'}`}>{d.title}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          {isLearningDone && <span title="학습 완료" className="text-emerald-500"><i className="fa-solid fa-graduation-cap"></i></span>}
+                          {isRoleplayDone && <span title="대화 완료" className="text-indigo-500"><i className="fa-solid fa-comments"></i></span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }) : words.map((w, idx) => (
+                  <div 
+                    key={w.id} 
+                    onClick={() => { setCurrentWordIndex(idx); setActiveTab('practice'); }}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer ${idx === currentWordIndex ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-transparent hover:border-slate-200'}`}
+                  >
+                    <p className="text-[10px] font-bold text-slate-400 uppercase">{w.category}</p>
+                    <p className={`text-sm font-bold ${idx === currentWordIndex ? 'text-indigo-600' : 'text-slate-700'}`}>{w.english}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'stats' && (
-           <div className="w-full max-w-lg mt-8 bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center">
-              <h3 className="text-lg font-bold mb-6">나의 학습 현황</h3>
+           <div className="w-full max-w-lg mt-8 bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center animate-in fade-in slide-in-from-bottom-4">
+              <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i className="fa-solid fa-chart-pie text-2xl text-indigo-500"></i>
+              </div>
+              <h3 className="text-lg font-bold mb-6 text-slate-800">나의 학습 리포트</h3>
               <div className="grid grid-cols-2 gap-4">
-                 <div className="bg-indigo-50 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold text-indigo-400 uppercase">대화 마스터</p>
-                    <p className="text-2xl font-black text-indigo-600">{progress.roleplayCompletedIds.length}</p>
+                 <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">대화 마스터</p>
+                    <p className="text-3xl font-black text-indigo-600">{progress.roleplayCompletedIds.length}</p>
                  </div>
-                 <div className="bg-emerald-50 p-4 rounded-2xl">
-                    <p className="text-[10px] font-bold text-emerald-400 uppercase">문장 학습</p>
-                    <p className="text-2xl font-black text-emerald-600">{progress.completedTurnIds.length}</p>
+                 <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">문장 성공</p>
+                    <p className="text-3xl font-black text-emerald-500">{progress.completedTurnIds.length}</p>
                  </div>
+              </div>
+              <div className="mt-8 pt-6 border-t border-slate-50">
+                <p className="text-sm font-medium text-slate-500 mb-1">오늘 총 학습</p>
+                <p className="text-4xl font-black text-slate-800">{progress.dailyCount} <span className="text-lg font-medium text-slate-400">개</span></p>
               </div>
            </div>
         )}
+
         {activeTab === 'settings' && (
           <div className="w-full max-w-lg mt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4">
             <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100">
-              <h3 className="text-lg font-bold text-slate-800 mb-6">학습 목표 설정</h3>
+              <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                <i className="fa-solid fa-sliders text-indigo-500"></i> 학습 목표 설정
+              </h3>
               <div className="space-y-8">
                 <div>
                   <div className="flex justify-between items-end mb-2">
@@ -343,23 +363,36 @@ const App: React.FC = () => {
                   <input type="range" min="50" max="100" step="5" value={progress.targetAccuracy} onChange={(e) => setProgress(p => ({ ...p, targetAccuracy: parseInt(e.target.value) }))} className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-500" />
                 </div>
               </div>
+              <button onClick={() => setActiveTab('practice')} className="w-full mt-10 py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg hover:bg-indigo-700 active:scale-95 transition-all">설정 저장</button>
             </div>
           </div>
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-4 flex justify-around items-center z-20 shadow-lg">
-        <button onClick={() => setActiveTab('practice')} className={`flex flex-col items-center gap-1 ${activeTab === 'practice' ? 'text-indigo-600' : 'text-slate-300'}`}>
-          <i className="fa-solid fa-microphone-lines text-lg"></i><span className="text-[10px] font-bold">연습</span>
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-4 flex justify-around items-center z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+        <button onClick={() => setActiveTab('practice')} className={`flex flex-col items-center gap-1 group ${activeTab === 'practice' ? 'text-indigo-600' : 'text-slate-300'}`}>
+          <div className={`p-2 rounded-xl transition-all ${activeTab === 'practice' ? 'bg-indigo-50' : 'group-hover:bg-slate-50'}`}>
+            <i className="fa-solid fa-microphone-lines text-lg"></i>
+          </div>
+          <span className="text-[10px] font-bold">연습</span>
         </button>
-        <button onClick={() => setActiveTab('library')} className={`flex flex-col items-center gap-1 ${activeTab === 'library' ? 'text-indigo-600' : 'text-slate-300'}`}>
-          <i className="fa-solid fa-layer-group text-lg"></i><span className="text-[10px] font-bold">목록</span>
+        <button onClick={() => setActiveTab('library')} className={`flex flex-col items-center gap-1 group ${activeTab === 'library' ? 'text-indigo-600' : 'text-slate-300'}`}>
+          <div className={`p-2 rounded-xl transition-all ${activeTab === 'library' ? 'bg-indigo-50' : 'group-hover:bg-slate-50'}`}>
+            <i className="fa-solid fa-layer-group text-lg"></i>
+          </div>
+          <span className="text-[10px] font-bold">목록</span>
         </button>
-        <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-1 ${activeTab === 'stats' ? 'text-indigo-600' : 'text-slate-300'}`}>
-          <i className="fa-solid fa-chart-line text-lg"></i><span className="text-[10px] font-bold">통계</span>
+        <button onClick={() => setActiveTab('stats')} className={`flex flex-col items-center gap-1 group ${activeTab === 'stats' ? 'text-indigo-600' : 'text-slate-300'}`}>
+          <div className={`p-2 rounded-xl transition-all ${activeTab === 'stats' ? 'bg-indigo-50' : 'group-hover:bg-slate-50'}`}>
+            <i className="fa-solid fa-chart-line text-lg"></i>
+          </div>
+          <span className="text-[10px] font-bold">통계</span>
         </button>
-        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 ${activeTab === 'settings' ? 'text-indigo-600' : 'text-slate-300'}`}>
-          <i className="fa-solid fa-user-gear text-lg"></i><span className="text-[10px] font-bold">설정</span>
+        <button onClick={() => setActiveTab('settings')} className={`flex flex-col items-center gap-1 group ${activeTab === 'settings' ? 'text-indigo-600' : 'text-slate-300'}`}>
+          <div className={`p-2 rounded-xl transition-all ${activeTab === 'settings' ? 'bg-indigo-50' : 'group-hover:bg-slate-50'}`}>
+            <i className="fa-solid fa-user-gear text-lg"></i>
+          </div>
+          <span className="text-[10px] font-bold">설정</span>
         </button>
       </footer>
     </div>
