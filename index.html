@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -30,6 +29,10 @@
             border-radius: 10px;
         }
     </style>
+<script>
+    // 브라우저에서 process.env 참조 시 발생하는 에러 방지
+    window.process = window.process || { env: { API_KEY: "" } };
+</script>
 <script type="importmap">
 {
   "imports": {
@@ -43,7 +46,6 @@
 </head>
 <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
-    <!-- 엔트리 포인트 스크립트 추가 -->
     <script type="module" src="./index.tsx"></script>
 </body>
 </html>
