@@ -1,0 +1,7 @@
+{
+  "name": "EchoMaster: Daily English Pronunciation",
+  "description": "Master English daily conversation with AI-powered pronunciation analysis. Practice 1000+ essential sentences and get instant feedback on your accent and accuracy.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
