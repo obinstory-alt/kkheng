@@ -1,6 +1,5 @@
-
 import React, { useEffect, useRef } from 'react';
-import { DialogueTurn, Word, AppState, AnalysisResult, Dialogue, DialoguePhase, Role } from '../types';
+import { DialogueTurn, Word, AppState, AnalysisResult, Dialogue, DialoguePhase, Role } from '../types.ts';
 
 interface PracticeCardProps {
   item: DialogueTurn | Word;
